@@ -7,3 +7,4 @@ __pycache__/
 .DS_Store
 *.log
 .env
+# NOTE: nltk_data/ is intentionally tracked for Vercel deployment
