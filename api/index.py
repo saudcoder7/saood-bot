@@ -1,32 +1,19 @@
 import os
-import sys
+import re
 import json
 import string
 
 # ── Point NLTK at the bundled data directory ─────────────────────────────────
-# On Vercel, __file__ is the api/index.py path; nltk_data lives one level up
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# On Vercel: __file__ = /var/task/api/index.py → BASE_DIR = /var/task
+BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NLTK_DATA_DIR = os.path.join(BASE_DIR, "nltk_data")
 
 import nltk
-if NLTK_DATA_DIR not in nltk.data.path:
-    nltk.data.path.insert(0, NLTK_DATA_DIR)
+nltk.data.path = [NLTK_DATA_DIR] + [p for p in nltk.data.path if p != NLTK_DATA_DIR]
 
-# Fallback: download if somehow not bundled (shouldn't happen on Vercel)
-_NLTK_PACKAGES = ["punkt_tab", "stopwords", "wordnet"]
-for _pkg in _NLTK_PACKAGES:
-    try:
-        _kind = (
-            "tokenizers" if _pkg.startswith("punkt") else
-            "corpora"
-        )
-        nltk.data.find(f"{_kind}/{_pkg}")
-    except LookupError:
-        nltk.download(_pkg, download_dir=NLTK_DATA_DIR, quiet=True)
-
+# ── NLTK components (only stopwords + wordnet needed — both bundled) ──────────
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -35,14 +22,17 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 # ── NLP helpers ──────────────────────────────────────────────────────────────
 _lemmatizer = WordNetLemmatizer()
-_stop_words = set(stopwords.words("english"))
+_stop_words  = set(stopwords.words("english"))
 
 
 def preprocess(text: str) -> str:
-    text = text.lower()
-    text = text.translate(str.maketrans("", "", string.punctuation))
-    tokens = word_tokenize(text)
-    tokens = [_lemmatizer.lemmatize(t) for t in tokens if t not in _stop_words and t.isalpha()]
+    """Lowercase → regex tokenize → remove stopwords → lemmatize.
+    Uses pure regex (no NLTK punkt data required).
+    """
+    text   = text.lower()
+    tokens = re.findall(r"[a-z]+", text)          # simple, robust, no data needed
+    tokens = [_lemmatizer.lemmatize(t)
+              for t in tokens if t not in _stop_words]
     return " ".join(tokens)
 
 
@@ -53,8 +43,8 @@ with open(FAQ_PATH, "r", encoding="utf-8") as f:
     FAQS = json.load(f)
 
 FAQ_QUESTIONS: list = [item["question"] for item in FAQS]
-FAQ_ANSWERS: list   = [item["answer"]   for item in FAQS]
-FAQ_CLEANED: list   = [preprocess(q) for q in FAQ_QUESTIONS]
+FAQ_ANSWERS:   list = [item["answer"]   for item in FAQS]
+FAQ_CLEANED:   list = [preprocess(q)    for q in FAQ_QUESTIONS]
 
 _vectorizer   = TfidfVectorizer()
 _tfidf_matrix = _vectorizer.fit_transform(FAQ_CLEANED)
@@ -68,14 +58,12 @@ CORS(app)
 
 @app.route("/")
 def serve_index():
-    public_dir = os.path.join(BASE_DIR, "public")
-    return send_from_directory(public_dir, "index.html")
+    return send_from_directory(os.path.join(BASE_DIR, "public"), "index.html")
 
 
 @app.route("/public/<path:filename>")
 def serve_public(filename):
-    public_dir = os.path.join(BASE_DIR, "public")
-    return send_from_directory(public_dir, filename)
+    return send_from_directory(os.path.join(BASE_DIR, "public"), filename)
 
 
 @app.route("/faqs", methods=["GET"])
@@ -100,10 +88,10 @@ def chat():
             "confidence": 0.0
         })
 
-    user_vec    = _vectorizer.transform([cleaned_msg])
+    user_vec     = _vectorizer.transform([cleaned_msg])
     similarities = cosine_similarity(user_vec, _tfidf_matrix).flatten()
-    best_idx    = int(similarities.argmax())
-    best_score  = float(similarities[best_idx])
+    best_idx     = int(similarities.argmax())
+    best_score   = float(similarities[best_idx])
 
     if best_score < CONFIDENCE_THRESHOLD:
         return jsonify({
@@ -124,14 +112,13 @@ def chat():
         })
 
     return jsonify({
-        "answer": FAQ_ANSWERS[best_idx],
+        "answer":           FAQ_ANSWERS[best_idx],
         "matched_question": FAQ_QUESTIONS[best_idx],
-        "confidence": round(best_score, 4)
+        "confidence":       round(best_score, 4)
     })
 
 
-# ── Vercel / gunicorn entry point ─────────────────────────────────────────────
-# Vercel looks for an `app` object in api/index.py
+# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False)
