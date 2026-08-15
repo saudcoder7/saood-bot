@@ -58,12 +58,12 @@ CORS(app)
 
 @app.route("/")
 def serve_index():
-    return send_from_directory(os.path.join(BASE_DIR, "public"), "index.html")
+    return send_from_directory(os.path.join(BASE_DIR, "frontend"), "index.html")
 
 
 @app.route("/public/<path:filename>")
 def serve_public(filename):
-    return send_from_directory(os.path.join(BASE_DIR, "public"), filename)
+    return send_from_directory(os.path.join(BASE_DIR, "frontend"), filename)
 
 
 @app.route("/faqs", methods=["GET"])
